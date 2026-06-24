@@ -26,28 +26,22 @@ from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
 
-
-#CONFIG -- should pretty much always be the same for our use case but change if needed
-
-# Countries considered "home" — sign-ins from outside these trigger an alert if successful
 DEFAULT_TRUSTED_COUNTRIES = {"US"}
 
-# Maximum realistic travel speed
-# A gap shorter than (distance / IMPOSSIBLE_TRAVEL_SPEED_KMH) hours between two successful sign-ins for the same user from different locations is flagged.
 IMPOSSIBLE_TRAVEL_SPEED_KMH = 900
 
-# Minimum km between two locations before impossible-travel check applies.
+
 IMPOSSIBLE_TRAVEL_MIN_KM = 200
 
 SEVERITY_WEIGHTS = {
-    "CRITICAL": 10,
-    "HIGH":     5,
-    "MEDIUM":   2,
-    "LOW":      0,   # negligible as requested
+    "CRITICAL": 30,
+    "HIGH":     10,
+    "MEDIUM":   5,
+    "LOW":      1,  
     "INFO":     0,
 }
 
-COMPROMISE_SCORE_THRESHOLD = 10  # minimum weighted score to appear on the list
+COMPROMISE_SCORE_THRESHOLD = 8 
 
 ALERT_CATEGORIES = {
     "Foreign Sign-In",
@@ -150,7 +144,7 @@ SENSITIVE_RESOURCES = [
 ]                
 
 
-# Error codes that indicate suspicious or attacker-relevant conditions.
+# Error codes that indicate suspicious conditions.
 # Change this as needed. Some logs will just be swimming with this /s
 SUSPICIOUS_ERROR_CODES = {
     "50199": "User prompted for additional verification (often post-compromise MFA disruption)",
@@ -661,6 +655,7 @@ def print_text_summary(findings: list[dict]) -> None:
     def _sort_key(item):
         user, score = item
         cats = user_cats[user]
+        score = score * (len(cats))^2
         all_cats   = cats >= ALERT_CATEGORIES   # has every category
         single_cat = len(cats) == 1             # all alerts same category
         return (
