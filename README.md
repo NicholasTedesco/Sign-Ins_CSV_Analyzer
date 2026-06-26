@@ -4,6 +4,7 @@ This is a CSV analyzer largely designed for Entra Sign-In logs. This is not a co
 
 What it does:
 it detects
+
     1. Foreign / unexpected country sign-ins
     2. Impossible travel (same user, multiple locations, implausible time delta)
     3. VPN / Tor / anonymous / bad-reputation ASN sign-ins
