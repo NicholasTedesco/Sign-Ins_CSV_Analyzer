@@ -750,9 +750,9 @@ def pick(options: list[str], prompt_text: str = "Select an option") -> int:
             print("  Invalid input, enter a number.")
 
 
-def menu_main(csv_path: str, trusted: set[str]) -> None:
+def menu_main(csv_path: str, trusted_countries: set[str], trusted_states: set[str]) -> None:
     while True:
-        print_header(csv_path, trusted)
+        print_header(csv_path, trusted_countries, trusted_states)
         print()
         choice = pick([
             "Full Analysis  — run all detections across all users",
@@ -763,12 +763,12 @@ def menu_main(csv_path: str, trusted: set[str]) -> None:
             print("\nExiting.\n")
             break
         elif choice == 1:
-            menu_full_analysis(csv_path, trusted)
+            menu_full_analysis(csv_path, trusted_countries, trusted_states)
         elif choice == 2:
-            menu_user_analysis(csv_path, trusted)
+            menu_user_analysis(csv_path, trusted_countries, trusted_states)
 
-def menu_full_analysis(csv_path: str, trusted: set[str]) -> None:
-    print_header(csv_path, trusted)
+def menu_full_analysis(csv_path: str, trusted_countries: set[str], trusted_states: set[str]) -> None:
+    print_header(csv_path, trusted_countries, trusted_states)
     print("\n  FULL ANALYSIS — Output Format\n")
     choice = pick([
         "Print to terminal",
@@ -779,7 +779,7 @@ def menu_full_analysis(csv_path: str, trusted: set[str]) -> None:
         return
 
     print(f"\n[*] Analyzing {csv_path} …")
-    findings = analyze(csv_path, trusted)
+    findings = analyze(csv_path, trusted_countries, trusted_states)
     findings = deduplicate_findings(findings)
     print(f"[*] {len(findings)} findings.\n")
 
@@ -797,8 +797,8 @@ def menu_full_analysis(csv_path: str, trusted: set[str]) -> None:
         Path(out_path).write_text(buf.getvalue(), encoding="utf-8")
         print(f"[*] Report written to {out_path}")
 
-def menu_user_analysis(csv_path: str, trusted: set[str]) -> None:
-    print_header(csv_path, trusted)
+def menu_user_analysis(csv_path: str, trusted_countries: set[str], trusted_states: set[str]) -> None:
+    print_header(csv_path, trusted_countries, trusted_states)
     print("\n  ANALYZE SPECIFIC USER\n")
     username = input("  Enter username (email): ").strip().lower()
     if not username:
@@ -806,7 +806,7 @@ def menu_user_analysis(csv_path: str, trusted: set[str]) -> None:
         return
 
     print(f"\n[*] Analyzing {csv_path} …")
-    all_findings = analyze(csv_path, trusted)
+    all_findings = analyze(csv_path, trusted_countries, trusted_states)
     all_findings = deduplicate_findings(all_findings)
     findings = [f for f in all_findings if f["username"].lower() == username]
 
@@ -843,20 +843,34 @@ def main():
         description="Analyze Entra ID interactive sign-in CSV for security threats."
     )
     parser.add_argument("csv", help="Path to the InteractiveSignIns CSV file.")
+
     parser.add_argument(
         "--trusted-countries", "-t", default=None,
         help="Comma-separated ISO country codes considered trusted "
              f"(default: {','.join(sorted(DEFAULT_TRUSTED_COUNTRIES))})."
     )
+
+    parser.add_argument(
+    "--trusted-states", "-s", default=None,
+    help="Comma-separated state/region codes considered trusted for MFA gap checks "
+         "(e.g. Texas,California). Default: Texas"
+    )
+
     args = parser.parse_args()
 
-    trusted = (
+    trusted_countries = (
         {c.strip().upper() for c in args.trusted_countries.split(",")}
         if args.trusted_countries
         else DEFAULT_TRUSTED_COUNTRIES
     )
 
-    menu_main(args.csv, trusted)
+    trusted_states = (
+        {s.strip().upper() for s in args.trusted_states.split(",")}
+        if args.trusted_states
+        else {""}
+        )
+
+    menu_main(args.csv, trusted_countries, trusted_states)
 
 
 if __name__ == "__main__":
