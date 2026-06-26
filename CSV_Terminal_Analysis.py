@@ -15,7 +15,7 @@ Detections:
     8. Suspicious sign-in error codes (50199, 500119, 90014, and others)
     9. Single-factor auth on sensitive resources (MFA gaps)
 """
-
+import re
 import argparse
 import csv
 import json
@@ -41,7 +41,7 @@ SEVERITY_WEIGHTS = {
     "INFO":     0,
 }
 
-COMPROMISE_SCORE_THRESHOLD = 8 
+COMPROMISE_SCORE_THRESHOLD = 50
 
 ALERT_CATEGORIES = {
     "Foreign Sign-In",
@@ -54,6 +54,7 @@ ALERT_CATEGORIES = {
     "Risky User (MS-Flagged)",
     "Suspicious Error Code",
     "Session ID Reuse / Token Replay",
+    "Impossible App/UA Combination",
 }
 
 # ASNs associated with known VPN providers, Tor exit nodes, hosting/proxy ranges. Feel free to extend this list
@@ -158,6 +159,16 @@ SUSPICIOUS_ERROR_CODES = {
     "50053": "Account locked (smart lockout triggered)",
 }
 
+IMPOSSIBLE_APP_UA_COMBOS = [
+    {
+        "ua_pattern":  r"firefox/142\d",  
+        "app_pattern": "outlook",
+        "detail":      "Firefox 142 with Outlook client app — FF does not support Outlook natively; likely spoofed UA or token replay.",
+        "severity":    "CRITICAL",
+        "category":    "Impossible App/UA Combination",
+    },
+]
+
 
 # COLUMN MAP  — adjust if your CSV export uses different header names
 
@@ -194,6 +205,9 @@ COL = {
 
 # helpers 
 
+def base_category(cat: str) -> str:
+    return re.sub(r'\s+x\d+$', '', cat)
+
 def parse_date(s: str) -> datetime | None:
     for fmt in ("%Y-%m-%dT%H:%M:%SZ", "%Y-%m-%d %H:%M:%S"):
         try:
@@ -201,6 +215,12 @@ def parse_date(s: str) -> datetime | None:
         except ValueError:
             pass
     return None
+
+def extract_OS(os: str) -> str:
+    """operating system"""
+    s = os
+    os_value = s.partition(" ")[0]
+    return os_value
 
 
 def extract_country(location: str) -> str:
@@ -230,8 +250,7 @@ def haversine_km(loc1: str, loc2: str, coord_cache: dict) -> float | None:
     a geo-IP database lookup.  Returns None if either location is unknown.
     """
     # We do a naive lookup; real deployments should use MaxMind GeoLite2 etc.
-    # Here we return None (skip the check) unless the same cache is populated
-    # externally.  The function signature is ready for a real implementation.
+    # Here we return None (skip the check)
     return None
 
 
@@ -309,7 +328,17 @@ def finding(category: str, severity: str, row: dict, detail: str) -> dict:
         "request_id": row.get(COL["request_id"], ""),
     }
 
-
+def check_impossible_app_ua_combos(ua: str, app: str, row: dict) -> list[dict]:
+    findings = []
+    ua_lower  = ua.lower()
+    app_lower = app.lower()
+    for combo in IMPOSSIBLE_APP_UA_COMBOS:
+        if re.search(combo["ua_pattern"], ua_lower) and combo["app_pattern"] in app_lower:
+            findings.append(finding(
+            combo["category"], combo["severity"], row,
+            combo["detail"] + f" UA: '{ua[:120]}' App: '{app}'."
+            ))
+    return findings
 
 # main analysis functions 
 # if you find an unusual amount of false positives this is probably where your edits are needed 
@@ -408,6 +437,14 @@ def analyze(csv_path: str, trusted_countries: set[str]) -> list[dict]:
                     f"Browser version is outdated: {old}. Full field: '{browser}'."
                 ))
 
+        # impossible app/UA combinations
+        if browser and app:
+            if "Firefox 142.0" in browser and "Microsoft Outlook" in app:
+                findings.append(finding(
+                    "Impossible ua & app combination", "CRITICAL", row,
+                    f"Application '{app}' cannot be used by '{browser}'" 
+                ))
+
         # suspicious applications like microsoft graph, etc
         app_lower = app.lower()
         for sus_app in SUSPICIOUS_APP_NAMES:
@@ -470,6 +507,10 @@ def analyze(csv_path: str, trusted_countries: set[str]) -> list[dict]:
             state_b = extract_state(b["location"])
         
             if (state_a and state_b and state_a == state_b) and (country_a == country_b):
+                continue
+            OS_a = extract_OS(a["os"])
+            OS_b = extract_OS(b["os"])
+            if (OS_a and OS_b and OS_a != OS_b) and ((OS_a or OS_b) == "Android" or "Ios") and ((OS_a or OS_b) == "Windows" or "Windows10" or "Windows11"):
                 continue
             delta_h = (b["dt"] - a["dt"]).total_seconds() / 3600
 
@@ -567,33 +608,33 @@ def deduplicate_findings(findings: list[dict]) -> list[dict]:
         # For everything else: category + username is enough.
         detail = f["detail"]
 
-        if f["category"] == "Suspicious Error Code":
+        if "Suspicious Error Code" in f["category"]:
             # Extract the error code from the detail string
             m = re.search(r"Error code (\d+)", detail)
             sig_detail = m.group(0) if m else detail[:40]
 
-        elif f["category"] == "Impossible Travel":
+        elif "Impossible Travel" in f["category"]:
             # Extract the two locations
             m = re.search(r"from '(.+?)'.+?'(.+?)'", detail)
             sig_detail = f"{m.group(1)} -> {m.group(2)}" if m else detail[:40]
 
-        elif f["category"] == "Foreign Sign-In":
+        elif "Foreign Sign-In" in f["category"] :
             m = re.search(r"from (\w+)", detail)
             sig_detail = m.group(0) if m else detail[:40]
 
-        elif f["category"] == "Outdated Browser":
+        elif "Outdated Browser" in f["category"]:
             # Same browser version for same user
             m = re.search(r"([\w]+ \d+)", detail)
             sig_detail = m.group(0) if m else detail[:40]
 
-        elif f["category"] == "Suspicious User Agent":
+        elif "Suspicious User Agent" in f["category"] :
             sig_detail = detail[:60]
 
-        elif f["category"] == "MFA Gap — Sensitive Resource":
+        elif "MFA Gap — Sensitive Resource" in f["category"] :
             m = re.search(r"'(.+?)'", detail)
             sig_detail = m.group(0) if m else detail[:40]
 
-        elif f["category"] == "Session ID Reuse / Token Replay":
+        elif "Session ID Reuse / Token Replay" in f["category"] :
             m = re.search(r"Session ID '(.+?)'", detail)
             sig_detail = m.group(0) if m else detail[:40]
 
@@ -632,7 +673,7 @@ SEVERITY_COLOR = {
 def print_text_summary(findings: list[dict]) -> None:
     from collections import Counter
     counts = Counter(f["severity"] for f in findings)
-    cat_counts = Counter(f["category"] for f in findings)
+    cat_counts = Counter(base_category(f["category"]) for f in findings)
 
     print("\n" + "=" * 70)
     print("  ENTRA ID SIGN-IN THREAT DETECTION REPORT")
@@ -650,12 +691,12 @@ def print_text_summary(findings: list[dict]) -> None:
     for f in findings:
         if f["username"]:
             user_scores[f["username"]] += SEVERITY_WEIGHTS.get(f["severity"], 0)
-            user_cats[f["username"]].add(f["category"])
+            user_cats[f["username"]].add(base_category(f["category"]))
 
     def _sort_key(item):
         user, score = item
         cats = user_cats[user]
-        score = score * (len(cats))^2
+        score = score * (len(cats))**2
         all_cats   = cats >= ALERT_CATEGORIES   # has every category
         single_cat = len(cats) == 1             # all alerts same category
         return (
@@ -744,10 +785,9 @@ def menu_full_analysis(csv_path: str, trusted: set[str]) -> None:
 
     if choice == 1:
         print_text_summary(findings)
-        input("\nPress Enter to return to the main menu…")
 
     elif choice == 2:
-        out_path = input("  Output file path [report.txt]: ").strip() or "report.txt"
+        out_path = input("  Output file ").strip() or "report.txt"
         import io
         buf = io.StringIO()
         _stdout = sys.stdout
@@ -756,7 +796,6 @@ def menu_full_analysis(csv_path: str, trusted: set[str]) -> None:
         sys.stdout = _stdout
         Path(out_path).write_text(buf.getvalue(), encoding="utf-8")
         print(f"[*] Report written to {out_path}")
-        input("\nPress Enter to return to the main menu…")
 
 def menu_user_analysis(csv_path: str, trusted: set[str]) -> None:
     print_header(csv_path, trusted)
@@ -773,7 +812,6 @@ def menu_user_analysis(csv_path: str, trusted: set[str]) -> None:
 
     if not findings:
         print(f"  No findings for '{username}'.")
-        input("\n  Press Enter to return to the main menu…")
         return
 
     print(f"[*] {len(findings)} findings for {username}.\n")
@@ -788,7 +826,6 @@ def menu_user_analysis(csv_path: str, trusted: set[str]) -> None:
 
     if choice == 1:
         print_text_summary(findings)
-        input("\nPress Enter to return to the main menu…")
 
     elif choice == 2:
         out_path = input(f"  Output file path [{username}_report.txt]: ").strip() or f"{username}_report.txt"
@@ -800,9 +837,6 @@ def menu_user_analysis(csv_path: str, trusted: set[str]) -> None:
         sys.stdout = _stdout
         Path(out_path).write_text(buf.getvalue(), encoding="utf-8")
         print(f"[*] Report written to {out_path}")
-        input("\nPress Enter to return to the main menu…")
-
-    input("\nPress Enter to return to the main menu…")
 
 def main():
     parser = argparse.ArgumentParser(
