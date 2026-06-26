@@ -41,7 +41,7 @@ SEVERITY_WEIGHTS = {
     "INFO":     0,
 }
 
-COMPROMISE_SCORE_THRESHOLD = 50
+COMPROMISE_SCORE_THRESHOLD = 10
 
 ALERT_CATEGORIES = {
     "Foreign Sign-In",
@@ -49,6 +49,7 @@ ALERT_CATEGORIES = {
     "Suspicious ASN / Hosting IP",
     "Suspicious User Agent",
     "Outdated Browser",
+    "Browser Version Change",
     "Suspicious Client Application",
     "MFA Gap — Sensitive Resource",
     "Risky User (MS-Flagged)",
@@ -343,7 +344,7 @@ def check_impossible_app_ua_combos(ua: str, app: str, row: dict) -> list[dict]:
 # main analysis functions 
 # if you find an unusual amount of false positives this is probably where your edits are needed 
 
-def analyze(csv_path: str, trusted_countries: set[str]) -> list[dict]:
+def analyze(csv_path: str, trusted_countries: set[str], trusted_states: set[str]) -> list[dict]:
     findings: list[dict] = []
 
     # tracking for impossible travel & SID reuse
@@ -456,24 +457,29 @@ def analyze(csv_path: str, trusted_countries: set[str]) -> list[dict]:
             break
 
         # check for repeated access to sensitive resource without 2FA from outside home state
-        # implementation for changing home state through terminal is coming... probably (remind me)
+        # This doesn't work right now so commented out until fixed
+        """""
         if is_success and "single-factor" in auth_req:
             res_lower = resource.lower()
             for sens in SENSITIVE_RESOURCES:
-                if sens in res_lower and extract_state(location) !="TEXAS":
+                if sens in res_lower and extract_state(location) not in trusted_states:
                     findings.append(finding(
                         "MFA Gap — Sensitive Resource", "HIGH", row,
                         f"Single-factor auth used to access '{resource}'. "
                         f"MFA result: '{mfa_result}'."
                     ))
                     break
-
+        """""
         # store rows on success for checking impossible travel and other things
         if status.lower() in ("success", "interrupted") and dt:
             user_sessions[user_id].append({
-                "dt": dt, "location": location, "ip": ip,
-                "ua": ua, "os": row.get(COL["os"], ""),
-                "row": row,
+                "dt":        dt,
+                "location":  location,
+                "ip":        ip,
+                "ua":        ua,
+                "os":        row.get(COL["os"], ""),
+                "session_id": session_id,
+                "row":       row,
             })
         # store rows on session_id being given or used. Catches session IDs on "failed" sign-ins
         if session_id:
@@ -497,7 +503,7 @@ def analyze(csv_path: str, trusted_countries: set[str]) -> list[dict]:
             ## debug
             if (a["location"] == b["location"]) or (a['location'] == ", ," or b['location'] == ", ,"):
                 continue
-            if a.get("session_id") != b.get("session_id") :
+            if a.get("session_id") and b.get("session_id") and a.get("session_id") == b.get("session_id"):
                 continue
             country_a = extract_country(a["location"])
             country_b = extract_country(b["location"])
@@ -514,6 +520,8 @@ def analyze(csv_path: str, trusted_countries: set[str]) -> list[dict]:
                 continue
             delta_h = (b["dt"] - a["dt"]).total_seconds() / 3600
 
+            if state_a in trusted_states or state_b in trusted_states:
+                continue
             if delta_h < 0.5:  # less than 30 minutes between different locations
                 findings.append(finding(
                     "Impossible Travel", "CRITICAL", b["row"],
@@ -526,6 +534,9 @@ def analyze(csv_path: str, trusted_countries: set[str]) -> list[dict]:
 
     # SID reuse
     for session_id, events in session_map.items():
+        ##events_sorted = sorted(events, key=lambda e: e["dt"])
+
+
         if not session_id or len(events) < 2:
             continue
 
@@ -555,7 +566,13 @@ def analyze(csv_path: str, trusted_countries: set[str]) -> list[dict]:
                 maj = int(m.group(2))
                 return f"{m.group(1)}/{maj - (maj % 2)}"
             return fam
-
+        
+        untrusted_events = [
+            e for e in events
+            if extract_state(e["location"]) not in trusted_states
+        ]
+        if len(untrusted_events) == 0:
+            continue
         unique_ua_buckets = {_ua_bucket(f) for f in ua_families if f}
         unique_ips  = {e["ip"]       for e in events if e["ip"]}
         unique_locs = {e["location"] for e in events if e["location"]}
@@ -585,14 +602,24 @@ def analyze(csv_path: str, trusted_countries: set[str]) -> list[dict]:
         if len(unique_locs) > 1: anomalies.append(f"locations: {unique_locs}")
         if len(unique_os)   > 1: anomalies.append(f"OSes: {unique_os}")
 
-        if anomalies:
+        trusted_state_locs = {
+        extract_state(e["location"]) for e in events if e["location"]
+        } & trusted_states 
+
+        if anomalies and trusted_state_locs:
+            findings.append(finding(
+                "Session ID Reuse / Token Replay", "LOW", events[0]["row"],
+                f"Session ID '{session_id}' seen across different contexts (includes trusted state activity): "
+                + "; ".join(anomalies) + "."
+            ))
+        elif anomalies:
             findings.append(finding(
                 "Session ID Reuse / Token Replay", "CRITICAL", events[0]["row"],
                 f"Session ID '{session_id}' seen across different contexts: "
                 + "; ".join(anomalies) + "."
             ))
 
-    return findings
+            return findings
 
 def deduplicate_findings(findings: list[dict]) -> list[dict]:
     """
@@ -726,12 +753,13 @@ def print_text_summary(findings: list[dict]) -> None:
         print(f"  ReqID:    {f['request_id']}")
 
 
-def print_header(csv_path: str, trusted: set[str]) -> None:
+def print_header(csv_path: str, trusted_countries: set[str], trusted_states: set[str]) -> None:
     print("=" * 60)
     print("  ENTRA ID SIGN-IN ANALYZER")
     print("=" * 60)
     print(f"  Source:            {csv_path}")
-    print(f"  Trusted countries: {', '.join(sorted(trusted))}")
+    print(f"  Trusted countries: {', '.join(sorted(trusted_countries))}")
+    print(f"  Trusted states: {', '.join(sorted(trusted_states))}")
     print("=" * 60)
 
 
@@ -852,8 +880,8 @@ def main():
 
     parser.add_argument(
     "--trusted-states", "-s", default=None,
-    help="Comma-separated state/region codes considered trusted for MFA gap checks "
-         "(e.g. Texas,California). Default: Texas"
+    help="Comma-separated state/region codes considered trusted, usually for VPN or RDP access "
+         "(e.g. Texas,California)."
     )
 
     args = parser.parse_args()
