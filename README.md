@@ -17,10 +17,12 @@ This is what it initially looks for.
 
 This is a rudementary script (may be obvious by this scuffed README) so use with caution and verify all findings. 
 
-Arguments 
-    --trusted-countries 
+Arguments: 
+
+    1. --trusted-countries
         Comma-seperated ISO country codes that should be considered non-foreign
-    --trusted-states
+    
+    2. --trusted-states
         Comma-seperated state/region codes considered trusted. This should refer to states that may be referenced in logs due to benign VPN or RDP usage.
-        If you use this I would highly reocmmend filtering for this state in the excel and checking it yourself for any non-benign activity originating from these states. 
+        If you use this I would highly reocmmend filtering for this state in the original log document and checking it yourself for any non-benign activity originating from these states. 
 
