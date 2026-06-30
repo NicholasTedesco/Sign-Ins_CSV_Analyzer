@@ -13,7 +13,14 @@ it detects
     8. Outdated browsers
     9. Suspicious sign-in error codes (50199, 500119, 90014, and others)
 This is what it initially looks for. 
-#3 is based on a hard coded library, same goes for suspicious user agents and outdated browsers. Feel free to add to this library as you see fit. 
+#3 is based on a hard coded library, same goes for suspicious user agents and outdated browsers. Feel free to add to or change this library as you see fit. 
 
 This is a rudementary script (may be obvious by this scuffed README) so use with caution and verify all findings. 
+
+Arguments 
+    --trusted-countries 
+        Comma-seperated ISO country codes that should be considered non-foreign
+    --trusted-states
+        Comma-seperated state/region codes considered trusted. This should refer to states that may be referenced in logs due to benign VPN or RDP usage.
+        If you use this I would highly reocmmend filtering for this state in the excel and checking it yourself for any non-benign activity originating from these states. 
 
