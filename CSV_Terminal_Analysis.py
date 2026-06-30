@@ -223,6 +223,11 @@ def extract_OS(os: str) -> str:
     os_value = s.partition(" ")[0]
     return os_value
 
+def extract_ip(ip: str) -> str:
+    """ip"""
+    s = ip
+    return s
+
 
 def extract_country(location: str) -> str:
     """Return 2-letter country code from 'City, State, CC' or 'City, CC'."""
@@ -439,12 +444,14 @@ def analyze(csv_path: str, trusted_countries: set[str], trusted_states: set[str]
                 ))
 
         # impossible app/UA combinations
+        # please add to this as new app/AU combo's are found
         if browser and app:
             if "Firefox 142.0" in browser and "Microsoft Outlook" in app:
                 findings.append(finding(
                     "Impossible ua & app combination", "CRITICAL", row,
                     f"Application '{app}' cannot be used by '{browser}'" 
                 ))
+            # append new combos here
 
         # suspicious applications like microsoft graph, etc
         app_lower = app.lower()
@@ -521,6 +528,10 @@ def analyze(csv_path: str, trusted_countries: set[str], trusted_states: set[str]
             delta_h = (b["dt"] - a["dt"]).total_seconds() / 3600
 
             if state_a in trusted_states or state_b in trusted_states:
+                continue
+            ip_a = extract_ip(a["ip"])
+            ip_b = extract_ip(b["ip"])
+            if ip_a == ip_b:
                 continue
             if delta_h < 0.5:  # less than 30 minutes between different locations
                 findings.append(finding(
